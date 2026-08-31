@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "iryzhkov.nebula",
+  "name": "Nebula VPN",
+  "version": "1.0.0",
+  "author": "iryzhkov",
+  "license": "MIT",
+  "description": "Nebula mesh VPN status and on/off toggle in the Omarchy bar, with per-node reachability.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Nebula VPN",
+    "description": "Toggle the Nebula mesh VPN and see which mesh nodes are reachable.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "unit": "nebula.service",
+      "device": "nebula1",
+      "refreshIntervalSec": 15,
+      "probeIntervalSec": 5,
+      "nodes": []
+    },
+    "schema": [
+      {
+        "key": "unit",
+        "type": "string",
+        "label": "Systemd unit",
+        "defaultValue": "nebula.service"
+      },
+      {
+        "key": "device",
+        "type": "string",
+        "label": "Tunnel interface",
+        "defaultValue": "nebula1"
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status poll interval (seconds)",
+        "min": 2,
+        "max": 600,
+        "step": 1,
+        "defaultValue": 15
+      },
+      {
+        "key": "probeIntervalSec",
+        "type": "integer",
+        "label": "Ping sweep interval while the panel is open (seconds)",
+        "min": 2,
+        "max": 120,
+        "step": 1,
+        "defaultValue": 5
+      }
+    ]
+  }
+}
