@@ -26,8 +26,8 @@ import qs.Ui
 // user that one unit, and falls back to `pkexec` otherwise. See the README.
 Panel {
   id: root
-  moduleName: "iryzhkov.nebula"
-  ipcTarget: "iryzhkov.nebula"
+  moduleName: "io.github.iryzhkov.nebula"
+  ipcTarget: "io.github.iryzhkov.nebula"
   manageIpc: false
 
   readonly property string unit: root.setting("unit", "nebula.service")
@@ -148,7 +148,7 @@ Panel {
   implicitHeight: button.implicitHeight
 
   IpcHandler {
-    target: "iryzhkov.nebula"
+    target: "io.github.iryzhkov.nebula"
 
     function open(): void { root.open() }
     function close(): void { root.close() }

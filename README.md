@@ -49,7 +49,7 @@ the count.
 
 ```json
 {
-  "id": "iryzhkov.nebula",
+  "id": "io.github.iryzhkov.nebula",
   "nodes": [
     { "name": "lighthouse", "address": "10.42.0.1", "role": "lighthouse" },
     { "name": "homelab",    "address": "10.42.0.2" },
@@ -133,14 +133,14 @@ handles it.
 ## IPC
 
 ```bash
-omarchy-shell iryzhkov.nebula status      # "up 10.42.0.5/24 · 4/5 reachable"
-omarchy-shell iryzhkov.nebula vpnOn
-omarchy-shell iryzhkov.nebula vpnOff
-omarchy-shell iryzhkov.nebula vpnToggle
-omarchy-shell iryzhkov.nebula open
-omarchy-shell iryzhkov.nebula close
-omarchy-shell iryzhkov.nebula toggle      # the panel, not the VPN
-omarchy-shell iryzhkov.nebula refresh
+omarchy-shell io.github.iryzhkov.nebula status      # "up 10.42.0.5/24 · 4/5 reachable"
+omarchy-shell io.github.iryzhkov.nebula vpnOn
+omarchy-shell io.github.iryzhkov.nebula vpnOff
+omarchy-shell io.github.iryzhkov.nebula vpnToggle
+omarchy-shell io.github.iryzhkov.nebula open
+omarchy-shell io.github.iryzhkov.nebula close
+omarchy-shell io.github.iryzhkov.nebula toggle      # the panel, not the VPN
+omarchy-shell io.github.iryzhkov.nebula refresh
 ```
 
 Bind one to a key in `~/.config/hypr/bindings.lua` if you want a shortcut;
@@ -173,8 +173,27 @@ omarchy plugin validate .
 ## Update
 
 ```bash
-omarchy plugin update iryzhkov.nebula
+omarchy plugin update io.github.iryzhkov.nebula
 ```
+
+## Remove
+
+```bash
+omarchy plugin remove io.github.iryzhkov.nebula
+```
+
+That deletes the plugin from `~/.config/omarchy/plugins` and drops its bar
+widget. Two things it deliberately leaves behind, because the plugin never
+created them silently and removing them is a privileged or destructive change:
+
+- The widget's entry in `~/.config/omarchy/shell.json`, including your `nodes`
+  list. Delete that block by hand if you want it gone.
+- The polkit rule at `/etc/polkit-1/rules.d/49-nebula.rules`, if you installed
+  one. Remove it with `sudo rm /etc/polkit-1/rules.d/49-nebula.rules` followed
+  by `sudo systemctl restart polkit`.
+
+Nebula itself, its systemd unit and its certificates are untouched — this
+plugin never installed them.
 
 ## License
 
