@@ -30,18 +30,73 @@ Panel {
   ipcTarget: "io.github.iryzhkov.nebula"
   manageIpc: false
 
-  readonly property string unit: root.setting("unit", "nebula.service")
-  readonly property string device: root.setting("device", "nebula1")
-  readonly property int refreshIntervalSec: Math.max(2, root.setting("refreshIntervalSec", 15))
-  readonly property int probeIntervalSec: Math.max(2, root.setting("probeIntervalSec", 5))
+  // ------------------------------------------------------ input hardening
+  //
+  // Everything that crosses into this file from outside — settings that may be
+  // hand-edited in shell.json, process output, IPC — is bounded and validated
+  // before it reaches a command line, an allocation, or a Text item. The unit
+  // and device names matter most: the unit name ends up under pkexec, so a
+  // malformed setting must fall back to the default rather than reach a
+  // privileged command.
+
+  readonly property int maxNodes: 64
+  readonly property int maxFieldChars: 128
+  readonly property int maxErrorChars: 400
+  readonly property int maxHelperBytes: 65536
+
+  function boundText(value, max) {
+    var s = String(value === undefined || value === null ? "" : value)
+    return s.length > max ? s.slice(0, max) : s
+  }
+
+  function finiteNum(value, lo, hi, fallback) {
+    var n = Number(value)
+    if (!isFinite(n)) return fallback
+    return Math.min(hi, Math.max(lo, n))
+  }
+
+  readonly property string unit: {
+    var u = String(root.setting("unit", "nebula.service"))
+    return /^[A-Za-z0-9:_.@-]{1,56}\.service$/.test(u) ? u : "nebula.service"
+  }
+  readonly property string device: {
+    var d = String(root.setting("device", "nebula1"))
+    return /^[A-Za-z0-9_.-]{1,15}$/.test(d) ? d : "nebula1"
+  }
+  readonly property int refreshIntervalSec: root.finiteNum(root.setting("refreshIntervalSec", 15), 2, 600, 15)
+  readonly property int probeIntervalSec: root.finiteNum(root.setting("probeIntervalSec", 5), 2, 120, 5)
 
   // Mesh members, this host excluded. Nebula has no peer discovery a client can
   // query without its debug interface enabled, so the list is configuration:
   // one { name, address, role } object per node in this widget's shell.json
-  // entry. `role` is "lighthouse" or "node" and defaults to "node".
+  // entry. `role` is "lighthouse" or "node" and defaults to "node". The list
+  // is capped and every field bounded before anything else reads it.
   readonly property var nodes: {
     var configured = root.setting("nodes", [])
-    return configured instanceof Array ? configured : []
+    if (!(configured instanceof Array)) return []
+    var out = []
+    for (var i = 0; i < configured.length && out.length < root.maxNodes; i++) {
+      var entry = configured[i]
+      if (!entry) continue
+      out.push({
+        name: root.boundText(entry.name, root.maxFieldChars),
+        address: root.boundText(entry.address, root.maxFieldChars),
+        role: root.boundText(entry.role || "node", 16)
+      })
+    }
+    return out
+  }
+
+  // Fixed absolute executables, a minimal explicit environment, and a hard
+  // deadline for every unprivileged helper. GNU timeout signals the child's
+  // own process group, TERM then KILL, so nothing outlives the deadline;
+  // Process reaps on exit. The pkexec escalation path deliberately does not
+  // go through this wrapper — pkexec sanitizes its own environment, and a
+  // deadline here would kill the polkit agent's password prompt while the
+  // user is still typing.
+  function helperCommand(seconds, argv) {
+    return ["/usr/bin/env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin",
+      "/usr/bin/timeout", "--kill-after=2", String(seconds)].concat(argv)
   }
 
   property bool unitActive: false
@@ -116,20 +171,24 @@ Panel {
     var addresses = []
     for (var i = 0; i < nodes.length; i++) {
       var address = String(nodes[i].address || "")
-      // Only plain IPv4 literals reach the shell, so a hand-edited shell.json
-      // cannot turn a node entry into a command substitution.
-      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(address)) addresses.push(address)
+      // Only plain IPv4 literals with valid octets reach the shell, so a
+      // hand-edited shell.json cannot turn a node entry into a command
+      // substitution.
+      if (/^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(address))
+        addresses.push(address)
     }
     if (addresses.length === 0) return
     probing = true
     // One backgrounded ping per node, then wait: the sweep costs one round of
     // latency rather than the sum of them, which matters with a node or two
-    // timing out at 2s each.
-    pingProc.command = ["bash", "-lc",
+    // timing out at 2s each. The script runs under the fixed-executable,
+    // minimal-environment, hard-deadline wrapper; each ping already gives up
+    // after 2s, so the 15s deadline only matters if something wedges.
+    pingProc.command = root.helperCommand(15, ["/bin/bash", "-c",
       'for ip in ' + addresses.join(" ") + '; do ' +
-      '( rtt=$(ping -c 1 -W 2 -q "$ip" 2>/dev/null | ' +
-      'sed -n "s|.*= [0-9.]*/\\([0-9.]*\\)/.*|\\1|p"); ' +
-      'echo "$ip ${rtt:--1}" ) & done; wait']
+      '( rtt=$(/usr/bin/ping -c 1 -W 2 -q "$ip" 2>/dev/null | ' +
+      '/usr/bin/sed -n "s|.*= [0-9.]*/\\([0-9.]*\\)/.*|\\1|p"); ' +
+      'echo "$ip ${rtt:--1}" ) & done; wait'])
     pingProc.running = true
   }
 
@@ -140,7 +199,7 @@ Panel {
     escalated = false
     toggleStderr = ""
     pendingVerb = unitActive ? "stop" : "start"
-    toggleProc.command = ["systemctl", pendingVerb, unit]
+    toggleProc.command = root.helperCommand(30, ["/usr/bin/systemctl", pendingVerb, unit])
     toggleProc.running = true
   }
 
@@ -172,7 +231,7 @@ Panel {
 
   Process {
     id: unitProc
-    command: ["systemctl", "is-active", "--quiet", root.unit]
+    command: root.helperCommand(5, ["/usr/bin/systemctl", "is-active", "--quiet", root.unit])
     onExited: function (exitCode) {
       root.unitActive = exitCode === 0
       if (!root.unitActive) {
@@ -184,11 +243,12 @@ Panel {
 
   Process {
     id: addressProc
-    command: ["ip", "-4", "-brief", "addr", "show", root.device]
+    command: root.helperCommand(5, ["/usr/bin/ip", "-4", "-brief", "addr", "show", root.device])
     stdout: StdioCollector {
       onStreamFinished: {
         // `ip -brief` prints "nebula1 UNKNOWN 10.42.0.5/24"; take the CIDR.
-        var match = String(text).match(/(\d+\.\d+\.\d+\.\d+\/\d+)/)
+        // One line expected; the slice bounds the regex input either way.
+        var match = String(text).slice(0, 4096).match(/(\d+\.\d+\.\d+\.\d+\/\d+)/)
         root.tunnelAddress = match ? match[1] : ""
       }
     }
@@ -199,9 +259,14 @@ Panel {
 
   Process {
     id: pingProc
+    property int collectedBytes: 0
     stdout: SplitParser {
       onRead: function (line) {
-        var parts = String(line).trim().split(/\s+/)
+        // One short line per node is expected; stop the producer outright if
+        // something floods the pipe instead.
+        pingProc.collectedBytes += line.length
+        if (pingProc.collectedBytes > root.maxHelperBytes) { pingProc.running = false; return }
+        var parts = String(line).trim().slice(0, 64).split(/\s+/)
         if (parts.length < 2) return
         var value = parseFloat(parts[1])
         // Reassigning the whole map is what makes QML re-evaluate the bindings
@@ -211,22 +276,37 @@ Panel {
         root.reachability = next
       }
     }
-    onExited: root.probing = false
+    onExited: {
+      root.probing = false
+      pingProc.collectedBytes = 0
+    }
+  }
+
+  // A sweep in flight serves nobody once the panel is closed.
+  onOpenedChanged: {
+    if (!opened) {
+      pingProc.running = false
+      probing = false
+    }
   }
 
   Process {
     id: toggleProc
     stderr: StdioCollector {
-      onStreamFinished: root.toggleStderr = String(text).trim()
+      onStreamFinished: root.toggleStderr = root.boundText(String(text).trim(), root.maxErrorChars)
     }
     onExited: function (exitCode) {
       // A plain systemctl call succeeds only where a polkit rule already grants
-      // this user the unit. Everywhere else the first attempt fails and pkexec
-      // takes over, which the desktop's polkit agent turns into a prompt.
-      if (exitCode !== 0 && !root.escalated) {
+      // this user the unit. Where it does not, systemctl reports the denied
+      // authorization and pkexec takes over, which the desktop's polkit agent
+      // turns into a prompt. Other failures — a missing unit, a bad config —
+      // would fail identically under root, so they surface as errors instead
+      // of a pointless password dialog.
+      var denied = /access denied|authentication|permission denied|not authorized/i.test(root.toggleStderr)
+      if (exitCode !== 0 && denied && !root.escalated) {
         root.escalated = true
         Qt.callLater(function () {
-          toggleProc.command = ["pkexec", "systemctl", root.pendingVerb, root.unit]
+          toggleProc.command = ["/usr/bin/pkexec", "/usr/bin/systemctl", root.pendingVerb, root.unit]
           toggleProc.running = true
         })
         return
@@ -347,6 +427,7 @@ Panel {
 
             Text {
               text: root.statusText.toUpperCase()
+              textFormat: Text.PlainText
               color: root.lastError !== "" ? root.urgent : Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -436,6 +517,7 @@ Panel {
           color: Qt.darker(root.foreground, 1.5)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
+          textFormat: Text.PlainText
           text: root.connected
             ? root.reachableCount + " of " + root.nodes.length + " reachable"
             : "Turn Nebula on to probe the mesh"
@@ -475,6 +557,7 @@ Panel {
       anchors.leftMargin: Style.space(9)
       anchors.verticalCenter: parent.verticalCenter
       text: parent.node ? String(parent.node.name) : ""
+      textFormat: Text.PlainText
       color: parent.up ? root.foreground : root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
@@ -489,6 +572,7 @@ Panel {
       anchors.rightMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
       text: parent.address
+      textFormat: Text.PlainText
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -500,6 +584,7 @@ Panel {
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       text: root.connected ? root.rttLabel(parent.address) : "—"
+      textFormat: Text.PlainText
       color: parent.up ? root.foreground : root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
