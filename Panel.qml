@@ -199,7 +199,13 @@ Panel {
     escalated = false
     toggleStderr = ""
     pendingVerb = unitActive ? "stop" : "start"
-    toggleProc.command = root.helperCommand(30, ["/usr/bin/systemctl", pendingVerb, unit])
+    // --no-ask-password makes the unprivileged attempt strictly
+    // non-interactive: where polkit would prompt, systemctl fails at once
+    // with "Interactive authentication required" and the pkexec fallback
+    // owns the prompting. Without it, some polkit configurations would ask
+    // through this call too, racing the 30s deadline while the user types.
+    toggleProc.command = root.helperCommand(30,
+      ["/usr/bin/systemctl", "--no-ask-password", pendingVerb, unit])
     toggleProc.running = true
   }
 
